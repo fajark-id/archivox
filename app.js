@@ -9,10 +9,14 @@ const searchInput = document.getElementById('search-input');
 const searchBtn = document.getElementById('search-btn');
 const resultsList = document.getElementById('results-list');
 
-// --- FUNGSI MEMBERSIHKAN & MENYERAGAMKAN METADATA ---
+// --- FUNGSI MEMBERSIHKAN & MENYERAGAMKAN METADATA (PROTEKSI ARRAY) ---
 function formatMetadataSeragam(rawTitle, rawCreator) {
-    let title = (rawTitle || '').trim();
-    let creator = (rawCreator || '').trim();
+    // KUNCI PERBAIKAN: Jika metadata berbentuk Array, ambil indeks pertama. Paksa menjadi String.
+    let title = Array.isArray(rawTitle) ? rawTitle[0] : rawTitle;
+    let creator = Array.isArray(rawCreator) ? rawCreator[0] : rawCreator;
+
+    title = String(title || '').trim();
+    creator = String(creator || '').trim();
 
     // 1. REGEX: Singkirkan teks sampah di dalam kurung siku [...] atau biasa (...)
     title = title.replace(/\[[^\]]*(mp3|dl|cc|hq|flac|download|free|full|album|lossless|kbps|320k|lyrics?|track)[^\]]*\]/gi, '');
@@ -68,7 +72,7 @@ function formatMetadataSeragam(rawTitle, rawCreator) {
     };
 }
 
-// --- LOGIKA UTAMA PENCARIAN (AKSELERASI CLIENT-SIDE) ---
+// --- LOGIKA UTAMA PENCARIAN ---
 searchBtn.addEventListener('click', lakukanPencarian);
 searchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') lakukanPencarian();
@@ -84,12 +88,16 @@ async function lakukanPencarian() {
         const targetCollections = '(collection:audio_music OR collection:opensource_audio OR collection:etree OR collection:78rpm OR subject:music)';
         const excludeJunk = 'NOT subject:podcast NOT collection:audio_podcasts NOT subject:headlines NOT "crap from the past"';
         
-        // AKSELERASI: Hapus filter format dari pencarian utama (agar server cepat), tapi minta kolom format dikirim lewat fl[]=format
-        // Kita naikkan rows ke 60 karena penyaringan dilakukan instan di browser kita
         const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (title:(${query}) OR creator:(${query})) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator,format&rows=60&output=json`;
         
         const response = await fetch(url);
         const data = await response.json();
+        
+        if (!data.response || !data.response.docs) {
+            resultsList.innerHTML = `<p class="status-text">Respon server tidak valid.</p>`;
+            return;
+        }
+        
         const items = data.response.docs;
 
         if (items.length === 0) {
@@ -97,12 +105,10 @@ async function lakukanPencarian() {
             return;
         }
 
-        // --- PENYARINGAN INSTAN DI SISI CLIENT (ANTI LEMOT) ---
-        // Memfilter secara kilat di komputer user, hanya meloloskan item yang punya aset MP3 atau FLAC
+        // --- PENYARINGAN AMAN SISI CLIENT ---
         const itemsValid = items.filter(item => {
             if (!item.format) return false;
-            // Archive.org kadang mengirim format berbentuk Array atau String tunggal
-            const daftarFormat = Array.isArray(item.format) ? item.format.map(f => f.toLowerCase()) : [item.format.toLowerCase()];
+            const daftarFormat = Array.isArray(item.format) ? item.format.map(f => String(f).toLowerCase()) : [String(item.format).toLowerCase()];
             return daftarFormat.some(f => f.includes('mp3') || f.includes('flac'));
         });
 
@@ -125,7 +131,7 @@ async function lakukanPencarian() {
 
         resultsList.innerHTML = '';
 
-        // Merender hasil
+        // Merender hasil tanpa takut eror tipe data
         koleksiFinal.forEach(item => {
             const bersih = formatMetadataSeragam(item.title, item.creator);
             
@@ -141,8 +147,8 @@ async function lakukanPencarian() {
         });
 
     } catch (error) {
-        resultsList.innerHTML = `<p class="status-text">Koneksi ke archive.org terputus. Silakan coba lagi.</p>`;
-        console.error(error);
+        resultsList.innerHTML = `<p class="status-text">Koneksi ke archive.org terputus atau terjadi kesalahan membaca data. Silakan coba lagi.</p>`;
+        console.error("Detail Eror:", error);
     }
 }
 
@@ -158,15 +164,20 @@ async function muatDanPutarLagu(identifier, judulBersih, artisBersih) {
         const response = await fetch(metadataUrl);
         const data = await response.json();
         
+        if (!data.files) {
+            alert("Arsip ini tidak memiliki file publik.");
+            return;
+        }
+
         let fileTerpilih = null;
         let tagFormat = "";
 
-        const fileFlac = data.files.find(f => f.name && f.name.toLowerCase().endsWith('.flac'));
+        const fileFlac = data.files.find(f => f.name && String(f.name).toLowerCase().endsWith('.flac'));
         if (fileFlac) {
             fileTerpilih = fileFlac;
             tagFormat = "HQ - FLAC";
         } else {
-            const fileMp3 = data.files.find(f => f.name && f.name.toLowerCase().endsWith('.mp3'));
+            const fileMp3 = data.files.find(f => f.name && String(f.name).toLowerCase().endsWith('.mp3'));
             if (fileMp3) {
                 fileTerpilih = fileMp3;
                 tagFormat = "SQ - MP3";
