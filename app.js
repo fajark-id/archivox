@@ -9,35 +9,81 @@ const searchInput = document.getElementById('search-input');
 const searchBtn = document.getElementById('search-btn');
 const resultsList = document.getElementById('results-list');
 
-// --- FUNGSI PEMBERSIH METADATA (ARTIS & JUDUL) ---
+// --- FUNGSI PEMBERSIH METADATA DENGAN REGEX ---
 function bersihkanMetadata(rawTitle, rawCreator) {
-    let title = (rawTitle || 'Judul Tidak Diketahui').trim();
-    let artist = (rawCreator || 'Artis Tidak Diketahui').trim();
+    let title = (rawTitle || '').trim();
+    let creator = (rawCreator || '').trim();
 
-    // 1. Jika judul mengandung pemisah standar seperti " - ", " – ", " : ", atau " | "
+    // 1. REGEX: Hapus teks junk di dalam kurung siku [...] (contoh: [ MP3 DL. CC ], [320kbps])
+    title = title.replace(/\[[^\]]*(mp3|dl|cc|hq|flac|download|free|full|album|lossless|kbps|320k|lyrics?|track)[^\]]*\]/gi, '');
+    
+    // 2. REGEX: Hapus teks promo di dalam kurung biasa (...) (contoh: (Official Audio), (Visualizer))
+    title = title.replace(/\([^)]*(official|video|visualizer|lyric|audio|hq|hd|live|remastered|clean|deluxe|album)[^)]*\)/gi, '');
+    
+    // Hapus sisa kurung kosong dan rapikan spasi berlebih
+    title = title.replace(/\[\s*\]/g, '').replace(/\(\s*\)/g, '');
+    title = title.replace(/\s+/g, ' ').trim();
+
+    let finalTitle = title;
+    let finalArtist = creator && !creator.includes('Tidak Diketahui') ? creator : 'Artis Tidak Diketahui';
+
+    // 3. LOGIKA PEMISAHAN (Agar Judul Lagu di Atas, Artis di Bawah)
     const separators = [' - ', ' – ', ' : ', ' | '];
+    let didSplit = false;
+
     for (let sep of separators) {
         if (title.includes(sep)) {
             const parts = title.split(sep);
-            artist = parts[0].trim();
-            title = parts[1].trim();
-            return { title, artist };
+            let p1 = parts[0].trim();
+            let p2 = parts[1].trim();
+
+            // Jika bagian pertama (p1) mirip nama creator, berarti formatnya: Artist - Title
+            if (creator && p1.toLowerCase().includes(creator.toLowerCase())) {
+                finalArtist = p1;
+                finalTitle = p2;
+            } 
+            // Jika bagian kedua (p2) mirip nama creator, berarti formatnya: Title - Artist
+            else if (creator && p2.toLowerCase().includes(creator.toLowerCase())) {
+                finalArtist = p2;
+                finalTitle = p1;
+            } 
+            // Default jika tidak ada creator tag: Asumsikan standar industri (Artist - Title)
+            else {
+                finalArtist = p1;
+                finalTitle = p2;
+            }
+            didSplit = true;
+            break;
         }
     }
 
-    // 2. Antisipasi kasus kata pertama KAPITAL PENUH tanpa strip (Contoh: "NIKI Every Summertime")
-    if (artist.includes('Tidak Diketahui') || artist === '') {
+    // Jika title dan creator sama persis (kasus album/koleksi)
+    if (!didSplit && creator && title.toLowerCase() === creator.toLowerCase()) {
+        finalTitle = title;
+        finalArtist = creator;
+    }
+
+    // Kasus khusus tanpa strip tapi kata pertama Kapital Penuh (Contoh: "NIKI Every Summertime")
+    if (!didSplit && finalArtist === 'Artis Tidak Diketahui') {
         const words = title.split(' ');
         if (words.length > 1 && words[0] === words[0].toUpperCase() && words[0].length > 1) {
-            artist = words[0];
-            title = words.slice(1).join(' ');
+            finalArtist = words[0];
+            finalTitle = words.slice(1).join(' ');
         }
     }
 
-    return { title, artist };
+    // Pembersihan akhir dari simbol sisa di ujung teks
+    finalTitle = finalTitle.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim();
+    finalArtist = finalArtist.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim();
+
+    // Fallback jika kosong telanjur bersih total
+    if (!finalTitle) finalTitle = 'Judul Tidak Diketahui';
+    if (!finalArtist) finalArtist = 'Artis Tidak Diketahui';
+
+    return { title: finalTitle, artist: finalArtist };
 }
 
-// --- LOGIKA PENCARIAN API DENGAN FILTER STRICT MUSIK ---
+// --- LOGIKA PENCARIAN API DENGAN FILTER FORMAT SEJAK AWAL ---
 searchBtn.addEventListener('click', lakukanPencarian);
 searchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') lakukanPencarian();
@@ -47,21 +93,21 @@ async function lakukanPencarian() {
     const query = searchInput.value.trim();
     if (!query) return;
 
-    resultsList.innerHTML = `<p class="status-text">Membuka brankas arsip musik...</p>`;
+    resultsList.innerHTML = `<p class="status-text">Mencari file lagu valid...</p>`;
 
     try {
         const targetCollections = '(collection:audio_music OR collection:opensource_audio OR collection:etree OR collection:78rpm OR subject:music)';
         const excludeJunk = 'NOT subject:podcast NOT collection:audio_podcasts NOT subject:headlines NOT "crap from the past"';
         
-        // Mencari field spesifik pada title atau creator agar hasil pencarian akurat
-        const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (title:(${query}) OR creator:(${query})) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator&rows=30&output=json`;
+        // REVOLUSI API: Menambahkan filter (format:MP3 OR format:FLAC) langsung di query pencarian utama
+        const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (format:MP3 OR format:FLAC) AND (title:(${query}) OR creator:(${query})) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator&rows=30&output=json`;
         
         const response = await fetch(url);
         const data = await response.json();
         const items = data.response.docs;
 
         if (items.length === 0) {
-            resultsList.innerHTML = `<p class="status-text">Musik tidak ditemukan.<br>Coba gunakan kata kunci lain.</p>`;
+            resultsList.innerHTML = `<p class="status-text">Musik dengan format MP3/FLAC tidak ditemukan.<br>Coba kata kunci lain.</p>`;
             return;
         }
 
@@ -92,14 +138,15 @@ async function lakukanPencarian() {
 
         resultsList.innerHTML = '';
 
+        // Merender Hasil Pencarian Secara Seragam
         items.forEach(item => {
             const meta = bersihkanMetadata(item.title, item.creator);
             
             const itemElement = document.createElement('div');
             itemElement.className = 'track-item';
             itemElement.innerHTML = `
-                <div class="item-title">${meta.title}</div>
-                <div class="item-subtitle">${meta.artist}</div>
+                <div class="item-title" style="font-weight: bold; font-size: 1.05rem; margin-bottom: 3px;">${meta.title}</div>
+                <div class="item-subtitle" style="opacity: 0.7; font-size: 0.88rem;">${meta.artist}</div>
             `;
             
             itemElement.addEventListener('click', () => muatDanPutarLagu(item.identifier, meta.title, meta.artist));
@@ -112,9 +159,9 @@ async function lakukanPencarian() {
     }
 }
 
-// --- LOGIKA PRIORITAS FORMAT (FLAC -> MP3) & STREAMING ---
+// --- LOGIKA PRIORITAS FORMAT & STREAMING ARSIP ---
 async function muatDanPutarLagu(identifier, cleanTitle, cleanArtist) {
-    document.getElementById('player-title').innerText = "Memeriksa format terbaik...";
+    document.getElementById('player-title').innerText = "Memutar lagu...";
     document.getElementById('player-artist').innerText = cleanArtist;
     playBtn.disabled = true;
     playBtn.innerText = 'Play';
@@ -127,37 +174,33 @@ async function muatDanPutarLagu(identifier, cleanTitle, cleanArtist) {
         let targetFile = null;
         let formatLabel = "";
 
-        // 1. Coba cari file berformat FLAC dulu (Kualitas Tertinggi)
-        const flacFile = data.files.find(file => file.name.toLowerCase().endsWith('.flac'));
+        // 1. Ambil FLAC jika ada
+        const flacFile = data.files.find(file => file.name && file.name.toLowerCase().endsWith('.flac'));
         
         if (flacFile) {
             targetFile = flacFile;
             formatLabel = "HQ - FLAC";
         } else {
-            // 2. Jika tidak ada FLAC, cari file MP3 sebagai cadangan
-            const mp3File = data.files.find(file => file.name.toLowerCase().endsWith('.mp3'));
+            // 2. Ambil MP3 jika FLAC absen
+            const mp3File = data.files.find(file => file.name && file.name.toLowerCase().endsWith('.mp3'));
             if (mp3File) {
                 targetFile = mp3File;
                 formatLabel = "SQ - MP3";
             }
         }
 
-        // Jika dua-duanya tidak ada di dalam folder item tersebut
         if (!targetFile) {
-            alert("Arsip ini tidak memiliki format FLAC ataupun MP3 yang bisa diputar.");
+            alert("File pemutaran tidak ditemukan pada arsip ini.");
             document.getElementById('player-title').innerText = "Pilih Lagu Lain";
-            document.getElementById('player-artist').innerText = "Format tidak didukung";
             return;
         }
 
-        // Menyusun URL streaming langsung dari archive.org
         const streamUrl = `https://archive.org/download/${identifier}/${encodeURIComponent(targetFile.name)}`;
         
-        // Memasukkan sumber musik ke tag audio dan memutarnya
         audio.src = streamUrl;
         audio.play();
         
-        // Tampilkan judul asli dan sematkan label format di nama artis
+        // Set info player utama secara seragam: Judul di atas, Artis + Format di bawah
         document.getElementById('player-title').innerText = cleanTitle;
         document.getElementById('player-artist').innerText = `${cleanArtist} • [${formatLabel}]`;
         playBtn.innerText = 'Pause';
