@@ -11,7 +11,7 @@ const resultsList = document.getElementById('results-list');
 
 let dataHasilPencarianGlobal = [];
 
-// --- FUNGSI MEMBERSIHMETADATA ALBUM UTAMA ---
+// --- FUNGSI MEMBERSIHKAN METADATA ALBUM UTAMA ---
 function formatMetadataSeragam(rawTitle, rawCreator) {
     let title = Array.isArray(rawTitle) ? rawTitle[0] : rawTitle;
     let creator = Array.isArray(rawCreator) ? rawCreator[0] : rawCreator;
@@ -66,7 +66,6 @@ async function lakukanPencarian() {
     resultsList.innerHTML = `<p class="status-text">Menganalisis tren internet & memetakan lagu...</p>`;
 
     try {
-        // TINGKAT 1: Ambil data popularitas global dari iTunes API
         let daftarPopulerGlobal = [];
         try {
             const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=musicTrack&limit=15`;
@@ -87,11 +86,9 @@ async function lakukanPencarian() {
             threshold: 0.5
         });
 
-        // Ambil data dari Archive.org dengan metode Full-Text Search metadata internal berkas
         const targetCollections = '(collection:audio_music OR collection:opensource_audio OR collection:etree OR collection:78rpm OR subject:music)';
         const excludeJunk = 'NOT subject:podcast NOT collection:audio_podcasts NOT subject:headlines NOT "crap from the past"';
         
-        // PERBAIKAN: query diubah dari strict fields ke global text matching agar menjangkau manifest berkas internal
         const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (${query}) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator,format,downloads&rows=80&output=json`;
         
         const response = await fetch(url);
@@ -137,11 +134,10 @@ async function lakukanPencarian() {
             };
         });
 
-        // Eksekusi pengurutan matriks 3 tingkat
         itemsDenganBobot.sort((a, b) => {
-            if (b.skorGlobal !== a.skorGlobal) return b.skorGlobal - a.skorGlobal; // 1. Tren Internet
-            if (b.punyaFlac !== a.punyaFlac) return b.punyaFlac - a.punyaFlac;     // 2. Ketersediaan HI-RES
-            return b.downloads - a.downloads;                                     // 3. Jumlah Unduhan Archive
+            if (b.skorGlobal !== a.skorGlobal) return b.skorGlobal - a.skorGlobal;
+            if (b.punyaFlac !== a.punyaFlac) return b.punyaFlac - a.punyaFlac;
+            return b.downloads - a.downloads;
         });
 
         dataHasilPencarianGlobal = itemsDenganBobot.map(wrapper => wrapper.dataAsli);
@@ -175,7 +171,7 @@ function tampilkanDaftarKoleksi(koleksi, kataKunciAsli = '') {
     });
 }
 
-// --- BEDAH DIREKTORI & EKSTRAKSI JUDUL MURNI ---
+// --- BEDAH DIREKTORI & EKSTRAKSI JALUR AUDIO MULTI-FORMAT ---
 async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '') {
     resultsList.innerHTML = `<p class="status-text">Membuka direktori berkas lagu...</p>`;
 
@@ -200,34 +196,37 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '
 
         const petaTrack = {};
         berkasAudio.forEach(file => {
-            // Prioritaskan tag title internal (ID3) dari berkas agar menghasilkan nama bersih seperti "Sahabat"
             let judulMurni = file.title || '';
             
-            // Jika tag title kosong, bersihkan nama berkas secara paksa dari nama album / angka track di depan
             if (!judulMurni) {
                 let namaMurni = file.name.replace(/\.(mp3|flac)$/i, '');
                 if (namaArtisKoleksi && namaMurni.toLowerCase().startsWith(namaArtisKoleksi.toLowerCase())) {
                     namaMurni = namaMurni.substring(namaArtisKoleksi.length);
                 }
-                namaMurni = namaMurni.replace(/^[\d\s.\-_]+/, ''); // Hapus nomor track seperti "01 - " atau "01. "
                 judulMurni = namaMurni.replace(/_/g, ' ').trim();
             }
 
-            // Normalisasi kunci pencocokan (mengubah variasi kata/simbol pemisah agar MP3 & FLAC melebur sempurna)
-            let kunciGrup = judulMurni.toLowerCase()
-                                      .replace(/\bdan\b|\byg\b|&/g, '') // Meleburkan variasi kata hubung penulisan uploader
-                                      .replace(/[^a-z0-9]/g, '');
+            // PERBAIKAN TOTAL NORMALISASI: Hapus angka trek dari depan judul murni dan samakan variasi kata hubung uploader
+            let judulTampilanRapi = judulMurni.replace(/^[\d\s.\-_]+/, '').trim();
+            let kunciGrup = judulTampilanRapi.toLowerCase()
+                                             .replace(/\bdan\b|\byg\b|\byang\b|&/g, '')
+                                             .replace(/[^a-z0-9]/g, '');
 
             if (!petaTrack[kunciGrup]) {
                 petaTrack[kunciGrup] = {
-                    tampilanJudul: judulMurni,
+                    tampilanJudul: judulTampilanRapi,
                     berkasMp3: null,
                     berkasFlac: null
                 };
             }
 
-            if (file.name.toLowerCase().endsWith('.mp3')) petaTrack[kunciGrup].berkasMp3 = file.name;
-            if (file.name.toLowerCase().endsWith('.flac')) petaTrack[kunciGrup].berkasFlac = file.name;
+            if (file.name.toLowerCase().endsWith('.mp3')) {
+                petaTrack[kunciGrup].berkasMp3 = file.name;
+            }
+            if (file.name.toLowerCase().endsWith('.flac')) {
+                petaTrack[kunciGrup].berkasFlac = file.name;
+                petaTrack[kunciGrup].tampilanJudul = judulTampilanRapi; // Menggunakan nama berbasis FLAC karena umumnya lebih bersih
+            }
         });
 
         resultsList.innerHTML = `
@@ -248,7 +247,7 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '
             trackElement.className = 'track-item';
             trackElement.style.borderLeft = '4px solid #1db954';
             
-            // Prioritaskan jalur FLAC jika tersedia di dalam item
+            // Sistem penentu prioritas format
             const fileFinalDipilih = track.berkasFlac ? track.berkasFlac : track.berkasMp3;
             const labelFormat = track.berkasFlac ? "HQ - FLAC" : "SQ - MP3";
             const badgeFormat = track.berkasFlac ? `<span style="background: #1db954; color: #000; font-size: 0.65rem; font-weight: bold; padding: 1px 4px; border-radius: 2px; margin-left: 5px;">FLAC</span>` : '';
