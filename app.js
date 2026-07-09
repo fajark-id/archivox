@@ -50,11 +50,11 @@ async function lakukanPencarian() {
     resultsList.innerHTML = `<p class="status-text">Membuka brankas arsip musik...</p>`;
 
     try {
-        // PERBAIKAN METHOD API: Mengunci koleksi khusus musik & membuang podcast/siaran berita
         const targetCollections = '(collection:audio_music OR collection:opensource_audio OR collection:etree OR collection:78rpm OR subject:music)';
         const excludeJunk = 'NOT subject:podcast NOT collection:audio_podcasts NOT subject:headlines NOT "crap from the past"';
         
-        const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (${query}) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator&rows=30&output=json`;
+        // Mencari field spesifik pada title atau creator agar hasil pencarian akurat
+        const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (title:(${query}) OR creator:(${query})) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator&rows=30&output=json`;
         
         const response = await fetch(url);
         const data = await response.json();
@@ -88,12 +88,10 @@ async function lakukanPencarian() {
             item.score = score;
         });
 
-        // Urutkan berdasarkan skor tertinggi
         items.sort((a, b) => b.score - a.score);
 
-        resultsList.innerHTML = ''; // Bersihkan tulisan loading
+        resultsList.innerHTML = '';
 
-        // Merender hasil pencarian
         items.forEach(item => {
             const meta = bersihkanMetadata(item.title, item.creator);
             
@@ -104,7 +102,6 @@ async function lakukanPencarian() {
                 <div class="item-subtitle">${meta.artist}</div>
             `;
             
-            // PERBAIKAN: Langsung oper meta.title dan meta.artist yang sudah bersih ke player
             itemElement.addEventListener('click', () => muatDanPutarLagu(item.identifier, meta.title, meta.artist));
             resultsList.appendChild(itemElement);
         });
@@ -115,10 +112,9 @@ async function lakukanPencarian() {
     }
 }
 
-// --- LOGIKA MENCARI FILE & STREAMING ---
+// --- LOGIKA PRIORITAS FORMAT (FLAC -> MP3) & STREAMING ---
 async function muatDanPutarLagu(identifier, cleanTitle, cleanArtist) {
-    // Pasang info teks bersih ke player secara instan sebelum loading selesai
-    document.getElementById('player-title').innerText = "Menghubungkan...";
+    document.getElementById('player-title').innerText = "Memeriksa format terbaik...";
     document.getElementById('player-artist').innerText = cleanArtist;
     playBtn.disabled = true;
     playBtn.innerText = 'Play';
@@ -128,30 +124,47 @@ async function muatDanPutarLagu(identifier, cleanTitle, cleanArtist) {
         const response = await fetch(metadataUrl);
         const data = await response.json();
         
-        // Mencari file audio .mp3
-        const mp3File = data.files.find(file => file.name.endsWith('.mp3'));
+        let targetFile = null;
+        let formatLabel = "";
 
-        if (!mp3File) {
-            alert("Arsip ini tidak memiliki file format .mp3 yang mendukung pemutaran langsung.");
+        // 1. Coba cari file berformat FLAC dulu (Kualitas Tertinggi)
+        const flacFile = data.files.find(file => file.name.toLowerCase().endsWith('.flac'));
+        
+        if (flacFile) {
+            targetFile = flacFile;
+            formatLabel = "HQ - FLAC";
+        } else {
+            // 2. Jika tidak ada FLAC, cari file MP3 sebagai cadangan
+            const mp3File = data.files.find(file => file.name.toLowerCase().endsWith('.mp3'));
+            if (mp3File) {
+                targetFile = mp3File;
+                formatLabel = "SQ - MP3";
+            }
+        }
+
+        // Jika dua-duanya tidak ada di dalam folder item tersebut
+        if (!targetFile) {
+            alert("Arsip ini tidak memiliki format FLAC ataupun MP3 yang bisa diputar.");
             document.getElementById('player-title').innerText = "Pilih Lagu Lain";
             document.getElementById('player-artist').innerText = "Format tidak didukung";
             return;
         }
 
-        const streamUrl = `https://archive.org/download/${identifier}/${mp3File.name}`;
+        // Menyusun URL streaming langsung dari archive.org
+        const streamUrl = `https://archive.org/download/${identifier}/${encodeURIComponent(targetFile.name)}`;
         
-        // Set audio source dan mainkan
+        // Memasukkan sumber musik ke tag audio dan memutarnya
         audio.src = streamUrl;
         audio.play();
         
-        // Kembalikan teks asli yang sudah bersih secara konsisten
+        // Tampilkan judul asli dan sematkan label format di nama artis
         document.getElementById('player-title').innerText = cleanTitle;
-        document.getElementById('player-artist').innerText = cleanArtist;
+        document.getElementById('player-artist').innerText = `${cleanArtist} • [${formatLabel}]`;
         playBtn.innerText = 'Pause';
         playBtn.disabled = false;
 
     } catch (error) {
-        alert("Gagal memuat audio dari server.");
+        alert("Gagal mengambil file audio dari server.");
         document.getElementById('player-title').innerText = "Terjadi Kesalahan";
         console.error(error);
     }
