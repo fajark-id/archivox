@@ -11,7 +11,7 @@ const resultsList = document.getElementById('results-list');
 
 let dataHasilPencarianGlobal = [];
 
-// --- FUNGSI MEMBERSIHKAN METADATA ---
+// --- FUNGSI MEMBERSIHKAN METADATA ALBUM UTAMA ---
 function formatMetadataSeragam(rawTitle, rawCreator) {
     let title = Array.isArray(rawTitle) ? rawTitle[0] : rawTitle;
     let creator = Array.isArray(rawCreator) ? rawCreator[0] : rawCreator;
@@ -27,8 +27,6 @@ function formatMetadataSeragam(rawTitle, rawCreator) {
     let finalArtist = creator && !creator.includes('Tidak Diketahui') ? creator : 'Artis Tidak Diketahui';
 
     const separators = [' - ', ' – ', ' : ', ' | '];
-    let terpotong = false;
-
     for (let sep of separators) {
         if (title.includes(sep)) {
             const bagian = title.split(sep);
@@ -45,17 +43,13 @@ function formatMetadataSeragam(rawTitle, rawCreator) {
                 finalArtist = kiri;
                 finalTitle = kanan;
             }
-            terpotong = true;
             break;
         }
     }
 
-    finalTitle = finalTitle.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim();
-    finalArtist = finalArtist.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim();
-
     return {
-        title: finalTitle || 'Judul Tidak Diketahui',
-        artist: finalArtist || 'Artis Tidak Diketahui'
+        title: finalTitle.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim() || 'Judul Tidak Diketahui',
+        artist: finalArtist.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim() || 'Artis Tidak Diketahui'
     };
 }
 
@@ -72,7 +66,7 @@ async function lakukanPencarian() {
     resultsList.innerHTML = `<p class="status-text">Menganalisis tren internet & memetakan lagu...</p>`;
 
     try {
-        // --- TINGKAT 1: AMBIL DATA POPULARITAS INTERNET GLOBAL VIA ITUNES ---
+        // TINGKAT 1: Ambil data popularitas global dari iTunes API
         let daftarPopulerGlobal = [];
         try {
             const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=musicTrack&limit=15`;
@@ -85,60 +79,52 @@ async function lakukanPencarian() {
                 }));
             }
         } catch (e) {
-            console.warn("Gagal mengambil tren popularitas global, beralih ke sortir standar.", e);
+            console.warn("Gagal mengambil tren popularitas global.", e);
         }
 
-        // Siapkan pencari Fuse untuk data popularitas global iTunes
         const fuseTrenGlobal = new Fuse(daftarPopulerGlobal, {
             keys: ['title'],
             threshold: 0.5
         });
 
-        // --- AMBIL DATA DARI ARCHIVE.ORG ---
+        // Ambil data dari Archive.org
         const targetCollections = '(collection:audio_music OR collection:opensource_audio OR collection:etree OR collection:78rpm OR subject:music)';
         const excludeJunk = 'NOT subject:podcast NOT collection:audio_podcasts NOT subject:headlines NOT "crap from the past"';
-        
-        // Kita tambahkan parameter 'downloads' ke fl[] untuk acuan TINGKAT 3
         const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (title:(${query}) OR creator:(${query})) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator,format,downloads&rows=80&output=json`;
         
         const response = await fetch(url);
         const data = await response.json();
         
         if (!data.response || !data.response.docs) {
-            resultsList.innerHTML = `<p class="status-text">Respon server archive.org tidak valid.</p>`;
+            resultsList.innerHTML = `<p class="status-text">Respon server tidak valid.</p>`;
             return;
         }
         
         const items = data.response.docs;
         if (items.length === 0) {
-            resultsList.innerHTML = `<p class="status-text">Koleksi tidak ditemukan.<br>Coba kata kunci lain.</p>`;
+            resultsList.innerHTML = `<p class="status-text">Koleksi tidak ditemukan.</p>`;
             return;
         }
 
-        // Validasi format file dasar
         const itemsValid = items.filter(item => {
             if (!item.format) return false;
             const formats = Array.isArray(item.format) ? item.format.map(f => String(f).toLowerCase()) : [String(item.format).toLowerCase()];
-            return formats.some(f => f.includes('mp3') || f.includes('flac'));
+            return formats.some(f => f.includes('mp3') || f.includes('flac') || f.includes('lossless'));
         });
 
-        // --- PROSES PEMBOBOTAN DATA UNTUK ALGORITMA SORTIR ---
         const itemsDenganBobot = itemsValid.map(item => {
             const bersih = formatMetadataSeragam(item.title, item.creator);
             
-            // 1. Hitung Nilai Tren Global (Poin maksimal jika masuk top 15 tangga lagu internet)
             const cocokTren = fuseTrenGlobal.search(bersih.title);
             let skorGlobal = 0;
             if (cocokTren.length > 0) {
-                // Semakin tinggi posisi lagunya di iTunes, skornya semakin besar (15 down to 1)
                 skorGlobal = 15 - cocokTren[0].refIndex;
             }
 
-            // 2. Deteksi Ketersediaan Format Hi-Res (FLAC)
+            // PERBAIKAN AKURASI: Cek "flac" ATAU "lossless" karena indeks archive menggunakan nama "Lossless Audio"
             const formats = Array.isArray(item.format) ? item.format.map(f => String(f).toLowerCase()) : [String(item.format).toLowerCase()];
-            const punyaFlac = formats.some(f => f.includes('flac')) ? 1 : 0;
+            const punyaFlac = formats.some(f => f.includes('flac') || f.includes('lossless')) ? 1 : 0;
 
-            // 3. Ambil Angka Total Unduhan Archive.org
             const jumlahDownloads = parseInt(item.downloads, 10) || 0;
 
             return {
@@ -150,48 +136,37 @@ async function lakukanPencarian() {
             };
         });
 
-        // --- EKSEKUSI PENYORTIRAN 3 TINGKAT MATRIKS ---
+        // Eksekusi pengurutan matriks 3 tingkat
         itemsDenganBobot.sort((a, b) => {
-            // TINGKAT 1: Bandingkan Popularitas Tren Musik Internet Global dahulu
-            if (b.skorGlobal !== a.skorGlobal) {
-                return b.skorGlobal - a.skorGlobal;
-            }
-            // TINGKAT 2: Jika sama-sama populer, taruh yang punya berkas kualitas tinggi (FLAC) di atas
-            if (b.punyaFlac !== a.punyaFlac) {
-                return b.punyaFlac - a.punyaFlac;
-            }
-            // TINGKAT 3: Jika sama-sama FLAC/MP3, urutkan berdasarkan statistik unduhan terbanyak
-            return b.downloads - a.downloads;
+            if (b.skorGlobal !== a.skorGlobal) return b.skorGlobal - a.skorGlobal; // 1. Tren Internet
+            if (b.punyaFlac !== a.punyaFlac) return b.punyaFlac - a.punyaFlac;     // 2. Ketersediaan HI-RES
+            return b.downloads - a.downloads;                                     // 3. Jumlah Unduhan Archive
         });
 
-        // Kembalikan ke struktur data normal
         dataHasilPencarianGlobal = itemsDenganBobot.map(wrapper => wrapper.dataAsli);
-
         tampilkanDaftarKoleksi(dataHasilPencarianGlobal);
 
     } catch (error) {
-        resultsList.innerHTML = `<p class="status-text">Terjadi kesalahan saat memproses data penyortiran.</p>`;
+        resultsList.innerHTML = `<p class="status-text">Gagal memproses data penyortiran.</p>`;
         console.error(error);
     }
 }
 
-// Menampilkan daftar utama koleksi/album terurut
 function tampilkanDaftarKoleksi(koleksi) {
     resultsList.innerHTML = '';
     
     koleksi.forEach(item => {
         const bersih = formatMetadataSeragam(item.title, item.creator);
         
-        // Deteksi berkas untuk kebutuhan visual label tanda HQ
         const formats = Array.isArray(item.format) ? item.format.map(f => String(f).toLowerCase()) : [String(item.format).toLowerCase()];
-        const adakahFlac = formats.some(f => f.includes('flac'));
+        const adakahFlac = formats.some(f => f.includes('flac') || f.includes('lossless'));
         const badgeHiRes = adakahFlac ? `<span style="background: #1db954; color: #000; font-size: 0.7rem; font-weight: bold; padding: 2px 5px; border-radius: 3px; margin-left: 8px;">HI-RES</span>` : '';
 
         const itemElement = document.createElement('div');
         itemElement.className = 'track-item';
         itemElement.innerHTML = `
             <div class="item-title" style="font-weight: bold; font-size: 1.05rem; margin-bottom: 3px; color: #ffffff;">📁 ${bersih.title} ${badgeHiRes}</div>
-            <div class="item-subtitle" style="opacity: 0.65; font-size: 0.88rem; color: #b3b3b3;">Koleksi/Album dari: ${bersih.artist}</div>
+            <div class="item-subtitle" style="opacity: 0.65; font-size: 0.88rem; color: #b3b3b3;">Koleksi dari: ${bersih.artist}</div>
         `;
         
         itemElement.addEventListener('click', () => bukaDirektoriLagu(item.identifier, bersih.artist));
@@ -199,7 +174,7 @@ function tampilkanDaftarKoleksi(koleksi) {
     });
 }
 
-// --- FUNGSI MEMBEDAH DIREKTORI BERKAS DI DALAM ALBUM ---
+// --- PERBAIKAN UTAMA: BEDAH DIREKTORI & EKSTRAKSI JUDUL MURNI ---
 async function bukaDirektoriLagu(identifier, namaArtisKoleksi) {
     resultsList.innerHTML = `<p class="status-text">Membuka direktori berkas lagu...</p>`;
 
@@ -209,7 +184,7 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi) {
         const data = await response.json();
         
         if (!data.files || data.files.length === 0) {
-            alert("Direktori berkas kosong atau tidak publik.");
+            alert("Direktori berkas kosong.");
             tampilkanDaftarKoleksi(dataHasilPencarianGlobal);
             return;
         }
@@ -217,25 +192,39 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi) {
         const berkasAudio = data.files.filter(f => f.name && (f.name.toLowerCase().endsWith('.mp3') || f.name.toLowerCase().endsWith('.flac')));
 
         if (berkasAudio.length === 0) {
-            alert("Tidak ditemukan berkas track audio valid di dalam direktori ini.");
+            alert("Tidak ditemukan berkas audio valid.");
             tampilkanDaftarKoleksi(dataHasilPencarianGlobal);
             return;
         }
 
         const petaTrack = {};
         berkasAudio.forEach(file => {
-            const namaMurniLagu = file.name.replace(/\.(mp3|flac)$/i, '');
+            // PERBAIKAN: Prioritaskan tag title internal (ID3) dari berkas agar menghasilkan nama bersih seperti "Sahabat"
+            let judulMurni = file.title || '';
             
-            if (!petaTrack[namaMurniLagu]) {
-                petaTrack[namaMurniLagu] = {
-                    tampilanJudul: namaMurniLagu.replace(/_/g, ' '),
-                    berkasMp3: file.name.toLowerCase().endsWith('.mp3') ? file.name : null,
-                    berkasFlac: file.name.toLowerCase().endsWith('.flac') ? file.name : null
-                };
-            } else {
-                if (file.name.toLowerCase().endsWith('.mp3')) petaTrack[namaMurniLagu].berkasMp3 = file.name;
-                if (file.name.toLowerCase().endsWith('.flac')) petaTrack[namaMurniLagu].berkasFlac = file.name;
+            // Jika tag title kosong, bersihkan nama berkas secara paksa dari nama album / angka track di depan
+            if (!judulMurni) {
+                let namaMurni = file.name.replace(/\.(mp3|flac)$/i, '');
+                if (namaArtisKoleksi && namaMurni.toLowerCase().startsWith(namaArtisKoleksi.toLowerCase())) {
+                    namaMurni = namaMurni.substring(namaArtisKoleksi.length);
+                }
+                namaMurni = namaMurni.replace(/^[\d\s.\-_]+/, ''); // Hapus nomor track seperti "01 - " atau "01. "
+                judulMurni = namaMurni.replace(/_/g, ' ').trim();
             }
+
+            // Normalisasi kunci pencocokan agar berkas MP3 dan FLAC dengan lagu yang sama melebur jadi satu baris di UI
+            const kunciGrup = judulMurni.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+            if (!petaTrack[kunciGrup]) {
+                petaTrack[kunciGrup] = {
+                    tampilanJudul: judulMurni,
+                    berkasMp3: null,
+                    berkasFlac: null
+                };
+            }
+
+            if (file.name.toLowerCase().endsWith('.mp3')) petaTrack[kunciGrup].berkasMp3 = file.name;
+            if (file.name.toLowerCase().endsWith('.flac')) petaTrack[kunciGrup].berkasFlac = file.name;
         });
 
         resultsList.innerHTML = `
@@ -256,15 +245,15 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi) {
             trackElement.className = 'track-item';
             trackElement.style.borderLeft = '4px solid #1db954';
             
+            // PERBAIKAN JALUR: Jika ada berkas FLAC, utamakan FLAC. Jika tidak ada, gunakan MP3.
+            const fileFinalDipilih = track.berkasFlac ? track.berkasFlac : track.berkasMp3;
             const labelFormat = track.berkasFlac ? "HQ - FLAC" : "SQ - MP3";
             const badgeFormat = track.berkasFlac ? `<span style="background: #1db954; color: #000; font-size: 0.65rem; font-weight: bold; padding: 1px 4px; border-radius: 2px; margin-left: 5px;">FLAC</span>` : '';
 
             trackElement.innerHTML = `
                 <div class="item-title" style="font-weight: bold; font-size: 1rem; color: #ffffff;">🎵 ${track.tampilanJudul} ${badgeFormat}</div>
-                <div class="item-subtitle" style="opacity: 0.65; font-size: 0.85rem; color: #b3b3b3;">${namaArtisKoleksi} • Klik untuk Mendengarkan</div>
+                <div class="item-subtitle" style="opacity: 0.65; font-size: 0.85rem; color: #b3b3b3;">${namaArtisKoleksi} • Klik untuk Streaming</div>
             `;
-
-            const fileFinalDipilih = track.berkasFlac ? track.berkasFlac : track.berkasMp3;
 
             trackElement.addEventListener('click', () => eksekusiStreamingLagu(identifier, fileFinalDipilih, track.tampilanJudul, namaArtisKoleksi, labelFormat));
             resultsList.appendChild(trackElement);
