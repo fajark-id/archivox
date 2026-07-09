@@ -53,7 +53,7 @@ function formatMetadataSeragam(rawTitle, rawCreator) {
     };
 }
 
-// --- LOGIKA UTAMA PENCARIAN & METODE SORTIR 3 TINGKAT ---
+// --- LOGIKA UTAMA PENCARIAN & METODE SORTIR MULTI-TIER ---
 searchBtn.addEventListener('click', lakukanPencarian);
 searchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') lakukanPencarian();
@@ -63,7 +63,7 @@ async function lakukanPencarian() {
     const query = searchInput.value.trim();
     if (!query) return;
 
-    resultsList.innerHTML = `<p class="status-text">Menganalisis tren internet & memetakan lagu...</p>`;
+    resultsList.innerHTML = `<p class="status-text">Menganalisis dan menyortir aset audio Hi-Res...</p>`;
 
     try {
         let daftarPopulerGlobal = [];
@@ -114,13 +114,14 @@ async function lakukanPencarian() {
         const itemsDenganBobot = itemsValid.map(item => {
             const bersih = formatMetadataSeragam(item.title, item.creator);
             
-            const cocokTren = fuseTrenGlobal.search(formatting => bersih.title);
+            const cocokTren = fuseTrenGlobal.search(bersih.title);
             let skorGlobal = 0;
             if (cocokTren.length > 0) {
                 skorGlobal = 15 - cocokTren[0].refIndex;
             }
 
             const formats = Array.isArray(item.format) ? item.format.map(f => String(f).toLowerCase()) : [String(item.format).toLowerCase()];
+            // Deteksi keberadaan aset lossless asli dari manifes berkas awal
             const punyaFlac = formats.some(f => f.includes('flac') || f.includes('lossless') || f.includes('wav')) ? 1 : 0;
 
             const jumlahDownloads = parseInt(item.downloads, 10) || 0;
@@ -134,17 +135,18 @@ async function lakukanPencarian() {
             };
         });
 
+        // PERBAIKAN URUTAN: Lossless wajib ditaruh di posisi paling atas secara agresif
         itemsDenganBobot.sort((a, b) => {
-            if (b.skorGlobal !== a.skorGlobal) return b.skorGlobal - a.skorGlobal;
-            if (b.punyaFlac !== a.punyaFlac) return b.punyaFlac - a.punyaFlac;
-            return b.downloads - a.downloads;
+            if (b.punyaFlac !== a.punyaFlac) return b.punyaFlac - a.punyaFlac; // TIER 1: Ketersediaan FLAC/Lossless
+            if (b.skorGlobal !== a.skorGlobal) return b.skorGlobal - a.skorGlobal; // TIER 2: Kecocokan Tren Global
+            return b.downloads - a.downloads; // TIER 3: Jumlah Download Archive
         });
 
         dataHasilPencarianGlobal = itemsDenganBobot.map(wrapper => wrapper.dataAsli);
         tampilkanDaftarKoleksi(dataHasilPencarianGlobal, query);
 
     } catch (error) {
-        resultsList.innerHTML = `<p class="status-text">Gagal memproses data penyortiran.</p>`;
+        resultsList.innerHTML = `<p class="status-text">Gagal memproses penyortiran berkas.</p>`;
         console.error(error);
     }
 }
@@ -163,7 +165,7 @@ function tampilkanDaftarKoleksi(koleksi, kataKunciAsli = '') {
         itemElement.className = 'track-item';
         itemElement.innerHTML = `
             <div class="item-title" style="font-weight: bold; font-size: 1.05rem; margin-bottom: 3px; color: #ffffff;">📁 ${bersih.title} ${badgeHiRes}</div>
-            <div class="item-subtitle" style="opacity: 0.65; font-size: 0.88rem; color: #b3b3b3;">Koleksi dari: ${bersih.artist}</div>
+            <div class="item-subtitle" style="opacity: 0.65; font-size: 0.88rem; color: #b3b3b3;">Koleksi dari: ${bersih.artist} (ID: ${item.identifier})</div>
         `;
         
         itemElement.addEventListener('click', () => bukaDirektoriLagu(item.identifier, bersih.artist, kataKunciAsli));
@@ -186,7 +188,6 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '
             return;
         }
 
-        // Filter format audio yang didukung aplikasi
         const berkasAudio = data.files.filter(f => f.name && (
             f.name.toLowerCase().endsWith('.mp3') || 
             f.name.toLowerCase().endsWith('.flac') || 
@@ -201,7 +202,6 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '
 
         const petaTrack = {};
         berkasAudio.forEach(file => {
-            // PERBAIKAN: Potong nama subfolder jika file berada di dalam sub-direktori (terdeteksi tanda "/")
             let namaBerkasMurni = file.name.substring(file.name.lastIndexOf('/') + 1);
             let judulMurni = file.title || '';
             
@@ -224,7 +224,6 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '
                     kandidatBerkas: []
                 };
             }
-            // Simpan semua format alternatif ke dalam satu grup lagu yang sama
             petaTrack[kunciGrup].kandidatBerkas.push(file);
         });
 
@@ -242,27 +241,26 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '
         Object.keys(petaTrack).forEach(kunci => {
             const track = petaTrack[kunci];
             
-            // PERBAIKAN UTAMA: Skema matriks poin penentu format audio secara mutlak
+            // SKEMA MATRIKS URUTAN FORMAT DALAM SATU GRUP LAGU
             track.kandidatBerkas.sort((a, b) => {
                 const hitungSkor = (f) => {
                     const nama = f.name.toLowerCase();
                     const formatTag = String(f.format || '').toLowerCase();
                     
                     if (nama.endsWith('.flac') || nama.endsWith('.wav') || formatTag.includes('lossless')) {
-                        return 3; // 1. LOSSLESS (Prioritas Puncak)
+                        return 3; // 1. LOSSLESS (FLAC / WAV)
                     }
-                    if (formatTag.includes('vbr') || nama.includes('vbr') || formatTag.includes('hifi')) {
+                    if (formatTag.includes('vbr') || nama.includes('vbr') || formatTag.includes('hifi') || formatTag.includes('320')) {
                         return 2; // 2. HIGH QUALITY MP3
                     }
                     if (nama.endsWith('.mp3')) {
-                        return 1; // 3. STANDARD QUALITY MP3
+                        return 1; // 3. STANDARD MP3
                     }
                     return 0;
                 };
                 return hitungSkor(b) - hitungSkor(a);
             });
 
-            // Berkas urutan teratas hasil penyortiran skor otomatis diambil
             const fileTerpilih = track.kandidatBerkas[0];
             const namaFileFinal = fileTerpilih.name;
             const ekstensi = namaFileFinal.substring(namaFileFinal.lastIndexOf('.')).toLowerCase();
@@ -278,7 +276,7 @@ async function bukaDirektoriLagu(identifier, namaArtisKoleksi, kataKunciAsli = '
                 const formatTag = String(fileTerpilih.format || '').toLowerCase();
                 if (formatTag.includes('vbr') || namaFileFinal.toLowerCase().includes('vbr')) {
                     labelFormat = "HQ - MP3";
-                    badgeFormat = `<span style="background: #ffb703; color: #000; font-size: 0.65rem; font-weight: bold; padding: 1px 4px; border-radius: 2px; margin-left: 5px;">HQ</span>`;
+                    badgeFormat = `<span style="background: #ffb703; color: #000; font-size: 0.65rem; font-weight: bold; padding: 1px 4px; border-radius: 2px; margin-left: 5px;">HQ MP3</span>`;
                 }
             }
 
