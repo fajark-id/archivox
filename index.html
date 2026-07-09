@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Archivox - Archive Music Player</title>
+    <!-- Menghubungkan ke file CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="app-container">
+        
+        <!-- Header Aplikasi -->
+        <div class="app-header">
+            <h1>Archivox</h1>
+            <p>Archive Music Player</p>
+        </div>
+        
+        <!-- 1. Area Input Search -->
+        <div class="search-box">
+            <input type="text" class="search-input" id="search-input" placeholder="Cari artis, lagu, atau genre lawas...">
+            <button class="search-btn" id="search-btn">Cari</button>
+        </div>
+
+        <!-- 2. Kotak Player Utama -->
+        <div class="player-card">
+            <div class="track-info">
+                <h2 class="track-title" id="player-title">Pilih Lagu di Bawah</h2>
+                <p class="track-artist" id="player-artist">Siap memutar musik</p>
+            </div>
+            <div class="controls">
+                <button class="play-btn" id="play-btn" disabled>Play</button>
+            </div>
+            <div class="progress-container">
+                <span id="current-time">0:00</span>
+                <input type="range" class="progress-bar" id="progress-bar" value="0" max="100">
+                <span id="duration">0:00</span>
+            </div>
+        </div>
+
+        <!-- 3. Daftar Baris Hasil Pencarian -->
+        <div class="results-container">
+            <h3 class="results-title">Hasil Pencarian</h3>
+            <div id="results-list">
+                <p class="status-text">Ketik sesuatu di atas lalu tekan Cari.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Tag Audio Element (Mesin Pemutar) -->
+    <audio id="audio-player"></audio>
+
+    <!-- Menghubungkan ke file JavaScript Logic -->
+    <script src="app.js"></script>
+</body>
+</html>
