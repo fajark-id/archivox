@@ -1,4 +1,4 @@
-// --- KOLEKSI ELEMEN UI ----
+// --- KOLEKSI ELEMEN UI ---
 const audio = document.getElementById('audio-player');
 const playBtn = document.getElementById('play-btn');
 const progressBar = document.getElementById('progress-bar');
