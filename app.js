@@ -1,4 +1,4 @@
-// Mengambil komponen HTML yang dibutuhkan
+// --- KOLEKSI ELEMEN UI ---
 const audio = document.getElementById('audio-player');
 const playBtn = document.getElementById('play-btn');
 const progressBar = document.getElementById('progress-bar');
@@ -9,81 +9,71 @@ const searchInput = document.getElementById('search-input');
 const searchBtn = document.getElementById('search-btn');
 const resultsList = document.getElementById('results-list');
 
-// --- FUNGSI PEMBERSIH METADATA DENGAN REGEX ---
-function bersihkanMetadata(rawTitle, rawCreator) {
+// --- FUNGSI MEMBERSIHKAN & MENYERAGAMKAN METADATA ---
+function formatMetadataSeragam(rawTitle, rawCreator) {
     let title = (rawTitle || '').trim();
     let creator = (rawCreator || '').trim();
 
-    // 1. REGEX: Hapus teks junk di dalam kurung siku [...] (contoh: [ MP3 DL. CC ], [320kbps])
+    // 1. REGEX: Singkirkan teks sampah di dalam kurung siku [...] atau biasa (...)
     title = title.replace(/\[[^\]]*(mp3|dl|cc|hq|flac|download|free|full|album|lossless|kbps|320k|lyrics?|track)[^\]]*\]/gi, '');
-    
-    // 2. REGEX: Hapus teks promo di dalam kurung biasa (...) (contoh: (Official Audio), (Visualizer))
     title = title.replace(/\([^)]*(official|video|visualizer|lyric|audio|hq|hd|live|remastered|clean|deluxe|album)[^)]*\)/gi, '');
     
-    // Hapus sisa kurung kosong dan rapikan spasi berlebih
-    title = title.replace(/\[\s*\]/g, '').replace(/\(\s*\)/g, '');
-    title = title.replace(/\s+/g, ' ').trim();
+    // Bersihkan sisa kurung kosong dan spasi ganda
+    title = title.replace(/\[\s*\]/g, '').replace(/\(\s*\)/g, '').replace(/\s+/g, ' ').trim();
 
     let finalTitle = title;
     let finalArtist = creator && !creator.includes('Tidak Diketahui') ? creator : 'Artis Tidak Diketahui';
 
-    // 3. LOGIKA PEMISAHAN (Agar Judul Lagu di Atas, Artis di Bawah)
+    // 2. STRATEGI MEMBELAH TEKS (Memastikan Judul di Atas, Artis di Bawah)
     const separators = [' - ', ' – ', ' : ', ' | '];
-    let didSplit = false;
+    let terpotong = false;
 
     for (let sep of separators) {
         if (title.includes(sep)) {
-            const parts = title.split(sep);
-            let p1 = parts[0].trim();
-            let p2 = parts[1].trim();
+            const bagian = title.split(sep);
+            let kiri = bagian[0].trim();
+            let kanan = bagian[1].trim();
 
-            // Jika bagian pertama (p1) mirip nama creator, berarti formatnya: Artist - Title
-            if (creator && p1.toLowerCase().includes(creator.toLowerCase())) {
-                finalArtist = p1;
-                finalTitle = p2;
+            // Jika sisi kiri mengandung nama creator asli, berarti formatnya: Artist - Title
+            if (creator && kiri.toLowerCase().includes(creator.toLowerCase())) {
+                finalArtist = kiri;
+                finalTitle = kanan;
             } 
-            // Jika bagian kedua (p2) mirip nama creator, berarti formatnya: Title - Artist
-            else if (creator && p2.toLowerCase().includes(creator.toLowerCase())) {
-                finalArtist = p2;
-                finalTitle = p1;
+            // Jika sisi kanan mengandung nama creator, berarti formatnya: Title - Artist
+            else if (creator && kanan.toLowerCase().includes(creator.toLowerCase())) {
+                finalArtist = kanan;
+                finalTitle = kiri;
             } 
-            // Default jika tidak ada creator tag: Asumsikan standar industri (Artist - Title)
+            // Jika tidak ada creator tag, ikuti standar global: Artist - Title
             else {
-                finalArtist = p1;
-                finalTitle = p2;
+                finalArtist = kiri;
+                finalTitle = kanan;
             }
-            didSplit = true;
+            terpotong = true;
             break;
         }
     }
 
-    // Jika title dan creator sama persis (kasus album/koleksi)
-    if (!didSplit && creator && title.toLowerCase() === creator.toLowerCase()) {
-        finalTitle = title;
-        finalArtist = creator;
-    }
-
-    // Kasus khusus tanpa strip tapi kata pertama Kapital Penuh (Contoh: "NIKI Every Summertime")
-    if (!didSplit && finalArtist === 'Artis Tidak Diketahui') {
-        const words = title.split(' ');
-        if (words.length > 1 && words[0] === words[0].toUpperCase() && words[0].length > 1) {
-            finalArtist = words[0];
-            finalTitle = words.slice(1).join(' ');
+    // Kasus khusus pencarian tanpa strip (Contoh: "NIKI Every Summertime")
+    if (!terpotong && finalArtist === 'Artis Tidak Diketahui') {
+        const kata = title.split(' ');
+        if (kata.length > 1 && kata[0] === kata[0].toUpperCase() && kata[0].length > 1) {
+            finalArtist = kata[0];
+            finalTitle = kata.slice(1).join(' ');
         }
     }
 
-    // Pembersihan akhir dari simbol sisa di ujung teks
+    // Pembersihan simbol liar di ujung teks hasil sisa potongan
     finalTitle = finalTitle.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim();
     finalArtist = finalArtist.replace(/^[-:|–\s]+|[-:|–\s]+$/g, '').trim();
 
-    // Fallback jika kosong telanjur bersih total
-    if (!finalTitle) finalTitle = 'Judul Tidak Diketahui';
-    if (!finalArtist) finalArtist = 'Artis Tidak Diketahui';
-
-    return { title: finalTitle, artist: finalArtist };
+    return {
+        title: finalTitle || 'Judul Tidak Diketahui',
+        artist: finalArtist || 'Artis Tidak Diketahui'
+    };
 }
 
-// --- LOGIKA PENCARIAN API DENGAN FILTER FORMAT SEJAK AWAL ---
+// --- LOGIKA UTAMA PENCARIAN (INTEGRASI FUSE.JS) ---
 searchBtn.addEventListener('click', lakukanPencarian);
 searchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') lakukanPencarian();
@@ -93,76 +83,66 @@ async function lakukanPencarian() {
     const query = searchInput.value.trim();
     if (!query) return;
 
-    resultsList.innerHTML = `<p class="status-text">Mencari file lagu valid...</p>`;
+    resultsList.innerHTML = `<p class="status-text">Menyelidiki arsip musik terbaik...</p>`;
 
     try {
         const targetCollections = '(collection:audio_music OR collection:opensource_audio OR collection:etree OR collection:78rpm OR subject:music)';
         const excludeJunk = 'NOT subject:podcast NOT collection:audio_podcasts NOT subject:headlines NOT "crap from the past"';
         
-        // REVOLUSI API: Menambahkan filter (format:MP3 OR format:FLAC) langsung di query pencarian utama
-        const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (format:MP3 OR format:FLAC) AND (title:(${query}) OR creator:(${query})) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator&rows=30&output=json`;
+        // Memastikan dari awal bahwa API hanya menarik item yang punya file MP3 atau FLAC asli
+        const url = `https://archive.org/advancedsearch.php?q=mediatype:audio AND (format:MP3 OR format:FLAC) AND (title:(${query}) OR creator:(${query})) AND ${targetCollections} ${excludeJunk}&fl[]=identifier,title,creator&rows=40&output=json`;
         
         const response = await fetch(url);
         const data = await response.json();
         const items = data.response.docs;
 
         if (items.length === 0) {
-            resultsList.innerHTML = `<p class="status-text">Musik dengan format MP3/FLAC tidak ditemukan.<br>Coba kata kunci lain.</p>`;
+            resultsList.innerHTML = `<p class="status-text">Musik format MP3/FLAC tidak ditemukan.<br>Coba kata kunci lain.</p>`;
             return;
         }
 
-        // --- SISTEM PENILAIAN RELEVANSI ---
-        const queryLower = query.toLowerCase();
-        const queryWords = queryLower.split(/\s+/);
+        // --- ENGINES BARU: FUSE.JS (FUZZY SEARCH & AUTOMATIC SORTING) ---
+        const opsiFuse = {
+            keys: ['title', 'creator'], // Kolom target pencarian
+            threshold: 0.5,            // Tingkat fleksibilitas kemiripan teks (0.0 sempurna - 1.0 sangat bebas)
+            distance: 100
+        };
+        
+        const fuse = new Fuse(items, opsiFuse);
+        const hasilFuse = fuse.search(query);
 
-        items.forEach(item => {
-            let score = 0;
-            const itemTitle = (item.title || '').toLowerCase();
-            const itemCreator = (item.creator || '').toLowerCase();
+        // Jika Fuse.js tidak menemukan kecocokan yang masuk akal, pakai data asli sebagai cadangan
+        const koleksiFinal = hasilFuse.length > 0 ? hasilFuse.map(result => result.item) : items;
 
-            if (itemTitle.includes(queryLower)) score += 100;
-            if (itemCreator.includes(queryLower)) score += 60;
+        resultsList.innerHTML = ''; // Bersihkan loading teks
 
-            queryWords.forEach(word => {
-                if (word.length > 1) {
-                    if (itemTitle.includes(word)) score += 20;
-                    if (itemCreator.includes(word)) score += 10;
-                    if (itemTitle.startsWith(word)) score += 15;
-                }
-            });
-
-            item.score = score;
-        });
-
-        items.sort((a, b) => b.score - a.score);
-
-        resultsList.innerHTML = '';
-
-        // Merender Hasil Pencarian Secara Seragam
-        items.forEach(item => {
-            const meta = bersihkanMetadata(item.title, item.creator);
+        // Merender hasil pencarian dengan format seragam
+        koleksiFinal.forEach(item => {
+            const bersih = formatMetadataSeragam(item.title, item.creator);
             
             const itemElement = document.createElement('div');
             itemElement.className = 'track-item';
+            
+            // Penguncian style: Judul Tebal di Atas, Nama Artis Agak Transparan di Bawah
             itemElement.innerHTML = `
-                <div class="item-title" style="font-weight: bold; font-size: 1.05rem; margin-bottom: 3px;">${meta.title}</div>
-                <div class="item-subtitle" style="opacity: 0.7; font-size: 0.88rem;">${meta.artist}</div>
+                <div class="item-title" style="font-weight: bold; font-size: 1.05rem; margin-bottom: 3px; color: #ffffff;">${bersih.title}</div>
+                <div class="item-subtitle" style="opacity: 0.65; font-size: 0.88rem; color: #b3b3b3;">${bersih.artist}</div>
             `;
             
-            itemElement.addEventListener('click', () => muatDanPutarLagu(item.identifier, meta.title, meta.artist));
+            itemElement.addEventListener('click', () => muatDanPutarLagu(item.identifier, bersih.title, bersih.artist));
             resultsList.appendChild(itemElement);
         });
 
     } catch (error) {
-        resultsList.innerHTML = `<p class="status-text">Gagal terhubung ke archive.org. Periksa koneksi internetmu.</p>`;
+        resultsList.innerHTML = `<p class="status-text">Koneksi ke archive.org terputus. Silakan coba lagi.</p>`;
         console.error(error);
     }
 }
 
-// --- LOGIKA PRIORITAS FORMAT & STREAMING ARSIP ---
-async function muatDanPutarLagu(identifier, cleanTitle, cleanArtist) {
-    document.getElementById('player-title').innerText = "Memutar lagu...";
-    document.getElementById('player-artist').innerText = cleanArtist;
+// --- LOGIKA ENGINE PLAYER & AUDIO STREAMING ---
+async function muatDanPutarLagu(identifier, judulBersih, artisBersih) {
+    document.getElementById('player-title').innerText = "Mengamankan sinyal audio...";
+    document.getElementById('player-artist').innerText = artisBersih;
     playBtn.disabled = true;
     playBtn.innerText = 'Play';
 
@@ -171,49 +151,47 @@ async function muatDanPutarLagu(identifier, cleanTitle, cleanArtist) {
         const response = await fetch(metadataUrl);
         const data = await response.json();
         
-        let targetFile = null;
-        let formatLabel = "";
+        let fileTerpilih = null;
+        let tagFormat = "";
 
-        // 1. Ambil FLAC jika ada
-        const flacFile = data.files.find(file => file.name && file.name.toLowerCase().endsWith('.flac'));
-        
-        if (flacFile) {
-            targetFile = flacFile;
-            formatLabel = "HQ - FLAC";
+        // Strategi Kualitas: Cari FLAC dulu, jika absen otomatis turun ke MP3
+        const fileFlac = data.files.find(f => f.name && f.name.toLowerCase().endsWith('.flac'));
+        if (fileFlac) {
+            fileTerpilih = fileFlac;
+            tagFormat = "HQ - FLAC";
         } else {
-            // 2. Ambil MP3 jika FLAC absen
-            const mp3File = data.files.find(file => file.name && file.name.toLowerCase().endsWith('.mp3'));
-            if (mp3File) {
-                targetFile = mp3File;
-                formatLabel = "SQ - MP3";
+            const fileMp3 = data.files.find(f => f.name && f.name.toLowerCase().endsWith('.mp3'));
+            if (fileMp3) {
+                fileTerpilih = fileMp3;
+                tagFormat = "SQ - MP3";
             }
         }
 
-        if (!targetFile) {
-            alert("File pemutaran tidak ditemukan pada arsip ini.");
+        if (!fileTerpilih) {
+            alert("Sistem gagal menemukan file pemutaran .mp3/.flac di dalam item ini.");
             document.getElementById('player-title').innerText = "Pilih Lagu Lain";
             return;
         }
 
-        const streamUrl = `https://archive.org/download/${identifier}/${encodeURIComponent(targetFile.name)}`;
+        const streamUrl = `https://archive.org/download/${identifier}/${encodeURIComponent(fileTerpilih.name)}`;
         
         audio.src = streamUrl;
         audio.play();
         
-        // Set info player utama secara seragam: Judul di atas, Artis + Format di bawah
-        document.getElementById('player-title').innerText = cleanTitle;
-        document.getElementById('player-artist').innerText = `${cleanArtist} • [${formatLabel}]`;
+        // Sinkronisasi data bersih ke komponen Player Utama
+        document.getElementById('player-title').innerText = judulBersih;
+        document.getElementById('player-artist').innerText = `${artisBersih} • [${tagFormat}]`;
         playBtn.innerText = 'Pause';
         playBtn.disabled = false;
 
     } catch (error) {
-        alert("Gagal mengambil file audio dari server.");
+        alert("Gagal memuat file dari server archive.org.");
         document.getElementById('player-title').innerText = "Terjadi Kesalahan";
         console.error(error);
     }
 }
 
-// --- LOGIKA KONTROL AUDIO & PROGRESS BAR ---
+// --- KONTROL TIMING AUDIO & PROGRESS BAR ---
 playBtn.addEventListener('click', () => {
     if (audio.paused) {
         audio.play();
